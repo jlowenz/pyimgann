@@ -3,10 +3,30 @@ import logging
 import pathlib as pl
 import cPickle as pkl
 from collections import defaultdict
+from sortedcontainers import SortedSet
 from PyQt4.QtCore import QObject, pyqtSignal
 
 log = logging.getLogger("pyimgann.model")
 log.setLevel(logging.DEBUG)
+
+class PointSet2D(object):
+    def __init__(self):
+        self.xs_ = defaultdict(SortedSet)
+        
+    def add(self, pt):
+        self.xs_[pt[0]].add(pt[1])
+        
+    def remove(self, pt):
+        x = self.xs_[pt[0]]
+        if x:
+            x.discard(pt[1])
+            
+    def points(self):
+        pts = []
+        for x,v in self.xs_.iteritems():
+            for y in v:
+                pts.append(np.array([x,y]))
+        return pts
 
 class ImageAnnotationModel(object):
     def __init__(self):
@@ -37,20 +57,26 @@ def load_images(d, pat, skip):
     pairs = gen_pairs(images, skip)
     return images, pairs
 
-def get_correspondences(proj, index=None):
-    pair_index = index or proj.get('index',0)
-    img_pair = proj['pairs'][pair_index]
-    return pair_index, proj['correspondences'][img_pair]
-
 def new_correspondence_project(name, image_path, skip, pat="*.png"):
     imgs, pairs = load_images(image_path, pat, skip)
     return {'name': name,
             'image_path': image_path,
             'images': imgs,
+            'kps': defaultdict(set),
             'pairs': pairs,
             'skip': skip,
             'correspondences': defaultdict(list),
             'pat': pat}
+
+def get_kps(proj, index):
+    pair_index = index or proj.get('index',0)
+    img_pair = proj['pairs'][pair_index]
+    return proj['kps'][img_pair[0]], proj['kps'][img_pair[1]]
+
+def get_correspondences(proj, index=None):
+    pair_index = index or proj.get('index',0)
+    img_pair = proj['pairs'][pair_index]
+    return pair_index, proj['correspondences'][img_pair]
 
 def corr_filename(basedir, left, right):
     """ Return the correspondence filename given the basedir and left/right
@@ -87,7 +113,7 @@ def load_correspondence_project(filename, load_all_corrs=False):
     loadpath = pl.Path(filename)
     if loadpath.exists():
         with open(str(loadpath),"r") as f:
-            proj = pkl.load(f)
+            proj = pkl.load(f)        
         if load_all_corrs:
             basedir = loadpath.parent
             #corr_paths = sorted(basedir.glob("*.csv"))

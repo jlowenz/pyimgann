@@ -5,7 +5,7 @@ import pathlib as pl
 import logging
 
 from PyQt4.QtCore import Qt, QRect, QLine, QMargins, \
-     QDir, pyqtSignal, QRectF, QPointF
+     QDir, pyqtSignal, QRectF, QPointF, QObject
 from PyQt4.QtGui import QApplication, QLabel, QWidget, QImage, QPainter, \
      QColor, QPixmap, QGridLayout, QLabel, QGraphicsView, QGraphicsScene, \
      QMainWindow, QPalette, QMenu, QAction, QFileDialog, QScrollArea, \
@@ -26,51 +26,69 @@ import qimage2ndarray as qn
 log = logging.getLogger('pyimgann.ui')
 log.setLevel(logging.DEBUG)
 
-class Annotation(object):
+class Annotation(QObject):
     BASE_COLOR = (255,0,0)
     SELECTED_COLOR = (0,255,0)
 
+    changed = pyqtSignal()
+
     """ Basic annotation that can handle points, lines, and polygons """
     def __init__(self, desc="", color=BASE_COLOR, pts=[]):
+        super(Annotation,self).__init__()
         self.desc_ = desc
         self.color_ = color
         self.pts_ = pts
-        self.radius_ = 3
+        self.radius_ = 4
+        self.index = -1
+        self.item_ = None
 
     def select(self):
         self.color_ = Annotation.SELECTED_COLOR
+        self.item_.setPen(self.qcolor)
+        self.changed.emit()
         
     def deselect(self):
         self.color_ = Annotation.BASE_COLOR
+        self.item_.setPen(self.qcolor)
+        self.changed.emit()
 
     @property
     def qcolor(self):
-        return QColor(self.color_[0],
-                      self.color_[1],
-                      self.color_[2])
-
-    def get_item(self):
-        num_pts = len(self.pts_)
-        if num_pts == 1:
-            # draw a point                
-            item = QGraphicsEllipseItem(self.pts_[0][0]-1,
-                                        self.pts_[0][1]-1,
-                                        self.radius_,
-                                        self.radius_)
-
-        elif num_pts == 2:
-            item = QGraphicsLineItem(self.pts_[0][0], self.pts_[0][1],
-                                     self.pts_[1][0], self.pts_[1][1])
+        if len(self.color_) == 3:
+            return QColor(self.color_[0],
+                          self.color_[1],
+                          self.color_[2])
         else:
-            poly = QPolygonF()
-            for p in self.pts_:
-                poly.append(QPointF(p[0],p[1]))
-            item = QGraphicsPolygonItem(poly)
-        item.setFlag(QGraphicsItem.ItemIsSelectable, True)
-        item.setPen(self.qcolor)
-        item.setEnabled(True)
-        item.setActive(True)
-        return item
+            return QColor(self.color_[0],
+                          self.color_[1],
+                          self.color_[2],
+                          self.color_[3])
+
+    @property
+    def item(self):
+        if self.item_ is None:
+            num_pts = len(self.pts_)
+            if num_pts == 1:
+                # draw a point          
+                item = QGraphicsEllipseItem(self.pts_[0][0]-self.radius_,
+                                            self.pts_[0][1]-self.radius_,
+                                            self.radius_+1,
+                                            self.radius_+1)
+                item.setBrush(self.qcolor)
+            elif num_pts == 2:
+                item = QGraphicsLineItem(self.pts_[0][0], self.pts_[0][1],
+                                         self.pts_[1][0], self.pts_[1][1])
+            else:
+                poly = QPolygonF()
+                for p in self.pts_:
+                    poly.append(QPointF(p[0],p[1]))
+                item = QGraphicsPolygonItem(poly)
+            item.setFlags(QGraphicsItem.ItemIsSelectable | QGraphicsItem.ItemIsFocusable)
+            item.setPen(self.qcolor)
+            item.setEnabled(True)
+            item.setActive(True)
+            self.item_ = item
+        return self.item_
         
 class DualImageView(QGraphicsView):
     VERTICAL = 0
@@ -80,6 +98,7 @@ class DualImageView(QGraphicsView):
     images_changed = pyqtSignal()
     annotations_changed = pyqtSignal()
     annotation_selected = pyqtSignal(int)
+    no_selection = pyqtSignal()
     
     image_a_click = pyqtSignal(int,int)
     image_b_click = pyqtSignal(int,int)    
@@ -95,33 +114,37 @@ class DualImageView(QGraphicsView):
         self.scene_ = QGraphicsScene(0,0,0,0,self.parent_)
         self.image_item_ = self.scene_.addPixmap(QPixmap())
         self.image_item_.setPos(0,0)
-        self.ann_group_ = QGraphicsItemGroup()
-        self.ann_group_.setPos(0,0)
-        self.scene_.addItem(self.ann_group_)        
+        #self.ann_group_ = QGraphicsItemGroup()
+        #self.ann_group_.setPos(0,0)
+        #self.scene_.addItem(self.ann_group_)
         self.setScene(self.scene_)
         self.scene_.selectionChanged.connect(self.on_selection_changed)
         
-        log.debug("ann_group is obscured: {0}".format(self.ann_group_.isObscured()))
-
         # TODO: handle orientation
         self.orientation_ = DualImageView.VERTICAL
         self.images_ = [None, None]
         self.composite_ = None
         self.annotations_ = []
         self.dim_ = 0
+        self.cancel_click_ = False
         
         self.images_changed.connect(self.on_images_changed)
         self.annotations_changed.connect(self.on_annotations_changed)
 
     def on_selection_changed(self):
         log.debug("on_selection_changed")
-        selected = self.scene_.selectedItems()[0]
-        idx = -1
-        for a in self.annotations_:
-            idx += 1
-            if a == selected:
-                log.debug(" emitting selection {0}".format(idx))
-                self.annotation_selected.emit(idx)
+        selected = self.scene_.selectedItems()
+        if len(selected) > 0:
+            self.cancel_click_ = True
+            selected = self.scene_.selectedItems()[0]
+            idx = -1
+            for a in self.annotations_:
+                idx += 1
+                if a.item == selected:
+                    log.debug(" emitting selection {0}".format(idx))
+                    self.annotation_selected.emit(idx)
+        else:
+            self.no_selection.emit()
 
     @property
     def image_b_offset(self):
@@ -148,14 +171,14 @@ class DualImageView(QGraphicsView):
         
     def on_annotations_changed(self):
         log.debug("on_annotations_changed")
-        self.scene_.removeItem(self.ann_group_)
-        self.ann_group_ = QGraphicsItemGroup()
-        self.ann_group_.setHandlesChildEvents(False)
-        self.ann_group_.setPos(0,0)
-        for a in self.annotations_:
-            log.debug(" adding item")
-            self.ann_group_.addToGroup(a.get_item())
-        self.scene_.addItem(self.ann_group_)
+        # self.scene_.removeItem(self.ann_group_)
+        # self.ann_group_ = QGraphicsItemGroup()
+        # self.ann_group_.setHandlesChildEvents(False)
+        # self.ann_group_.setPos(0,0)
+        # for a in self.annotations_:
+        #     log.debug(" adding item")
+        #     self.ann_group_.addToGroup(a.get_item())
+        # self.scene_.addItem(self.ann_group_)
         self.repaint()
 
     def transform_raw_pt(self, ev):
@@ -173,14 +196,14 @@ class DualImageView(QGraphicsView):
         self.images_ = img_pair
         self.images_changed.emit()
 
-    @property
-    def annotations(self):
-        return self.annotations_
+    # @property
+    # def annotations(self):
+    #     return self.annotations_
     
-    @annotations.setter
-    def annotations(self, anns):
-        self.annotations_ = anns
-        self.annotations_changed.emit()
+    # @annotations.setter
+    # def annotations(self, anns):
+    #     self.annotations_ = anns
+    #     self.annotations_changed.emit()
 
     # def set_annotations(self, anns):
     #     self.annotations_ = anns
@@ -192,21 +215,44 @@ class DualImageView(QGraphicsView):
         painter.end()
         QGraphicsView.paintEvent(self, ev)
 
-    def add_annotation(self, ann):
-        self.annotations_.append(ann)
+    def annotation(self, idx):
+        return self.annotations_[idx]
+
+    def clear_annotations(self):
+        for a in self.annotations_:
+            self.scene_.removeItem(a.item)
+        self.annotations_ = []
         self.annotations_changed.emit()
+
+    def add_annotation(self, ann):
+        ann.changed.connect(self.on_annotations_changed)
+        self.annotations_.append(ann)
+        self.scene_.addItem(ann.item)
+        self.annotations_changed.emit()
+        return len(self.annotations_) - 1
         
     def remove_last_annotation(self):
+        self.scene_.removeItem(self.annotations_[-1].item)
         del self.annotations_[-1]
+        self.annotations_changed.emit()
+
+    def remove_annotation(self, idx):
+        self.scene_.removeItem(self.annotations_[idx].item)
+        del self.annotations_[idx]
         self.annotations_changed.emit()
 
     def mousePressEvent(self, ev):
         super(DualImageView,self).mousePressEvent(ev)
-        log.debug("mouse pressed: " + str(ev))        
+        if self.cancel_click_:
+            return
+        log.debug("mouse pressed: " + str(ev))
         self.img_local_pt = self.transform_raw_pt(ev)
 
     def mouseReleaseEvent(self, ev):
         super(DualImageView,self).mouseReleaseEvent(ev)
+        if self.cancel_click_:
+            self.cancel_click_ = False
+            return
         log.debug("mouse released: " + str(ev))
         rel_pt = self.transform_raw_pt(ev)
         delta = rel_pt - self.img_local_pt
@@ -319,24 +365,18 @@ class MainWindow(QMainWindow):
         super(MainWindow,self).__init__()
         self.dual_img_ = DualImageView(self)
         self.corr_list_ = QTableView(self)
-        #self.corr_list_.Header().setVisible(False)
         self.pair_list_ = QListView(self)
         self.next_button_ = QPushButton("&Next",self)
         self.prev_button_ = QPushButton("&Previous",self)
         self.status_msg_ = QLabel("Status...",self)
         
+        self.corr_list_.verticalHeader().setVisible(False)
+        self.corr_list_.setSelectionBehavior(QTableView.SelectRows)
+
         self.create_layout()
         self.create_menu()
 
         self.setWindowTitle("Image Annotation")
-            
-    # def resizeEvent(self, ev):
-    #     log.debug("resizeEvent")
-    #     w = self.corr_list_.width()
-    #     cnt = self.corr_list_.horizontalHeader().count()
-    #     for i in range(cnt):
-    #         self.corr_list_.setColumnWidth(i, w/2)
-    #     super(MainWindow,self).resizeEvent(ev)
 
     def select(self, name):
         try:
