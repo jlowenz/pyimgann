@@ -53,6 +53,22 @@ class Annotation(QObject):
         self.changed.emit()
 
     @property
+    def is_point(self):
+        return len(self.pts_) == 1
+    
+    @property
+    def is_line(self):
+        return len(self.pts_) == 2
+
+    @property
+    def is_polygon(self):
+        return len(self.pts_) > 2
+
+    @property
+    def points(self):
+        return self.pts_
+    
+    @property
     def qcolor(self):
         if len(self.color_) == 3:
             return QColor(self.color_[0],
@@ -72,8 +88,8 @@ class Annotation(QObject):
                 # draw a point          
                 item = QGraphicsEllipseItem(self.pts_[0][0]-self.radius_,
                                             self.pts_[0][1]-self.radius_,
-                                            self.radius_+1,
-                                            self.radius_+1)
+                                            2*self.radius_,
+                                            2*self.radius_)
                 item.setBrush(self.qcolor)
             elif num_pts == 2:
                 item = QGraphicsLineItem(self.pts_[0][0], self.pts_[0][1],
@@ -93,6 +109,8 @@ class Annotation(QObject):
 class DualImageView(QGraphicsView):
     VERTICAL = 0
     HORIZONTAL = 1
+    IMAGE_A = 0
+    IMAGE_B = 1
 
     # no argument signal
     images_changed = pyqtSignal()
@@ -126,6 +144,7 @@ class DualImageView(QGraphicsView):
         self.composite_ = None
         self.annotations_ = []
         self.dim_ = 0
+        self.offset_ = np.array([0,0])
         self.cancel_click_ = False
         
         self.images_changed.connect(self.on_images_changed)
@@ -150,6 +169,17 @@ class DualImageView(QGraphicsView):
     def image_b_offset(self):
         return np.array([0,self.dim_],dtype=np.int32)
 
+    def point_in_image(self, p):
+        if p[1] < self.dim_:
+            return 0
+        else:
+            return 1
+
+    def point_to_image(self, which, p):
+        if which == DualImageView.IMAGE_B:
+            return p - self.offset_
+        return p
+
     def on_images_changed(self):
         imga = self.images_[0]
         imgb = self.images_[1]
@@ -158,6 +188,7 @@ class DualImageView(QGraphicsView):
         heightb = imgb.shape[0]
         height = heighta + heightb
         self.dim_ = heighta
+        self.offset_ = np.array([0,heighta])
         # this assumes rgb images :-(
         comp = np.empty((height,width,imga.shape[2]),dtype=imga.dtype)
         comp[0:heighta,:imga.shape[1],:] = imga
@@ -272,6 +303,8 @@ class DualImageView(QGraphicsView):
             self.image_a_click.emit(pt[0],pt[1])
         else:
             self.image_b_click.emit(pt[0],pt[1] - self.dim_)
+
+    # handle the keyboard events here!
 
 class QFileField(QWidget):
     # itemSelected is emitted when a valid file/dir is chosen

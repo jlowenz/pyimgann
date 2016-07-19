@@ -263,6 +263,14 @@ class CorrespondenceController(AnnotationController):
         ann = self.dual_img.annotation(idx)
         self.selection = (idx, ann)
         ann.select()
+        if ann.is_point:
+            p = ann.points[0]
+            which_image = self.dual_img.point_in_image(p)
+            if which_image == ui.DualImageView.IMAGE_A:
+                self.image_a_clicked(p[0], p[1])
+            else:
+                pp = self.dual_img.point_to_image(which_image, p)
+                self.image_b_clicked(pp[0], pp[1])
 
     def pair_selected(self, item_selections):
         if len(item_selections.indexes()) == 0:
