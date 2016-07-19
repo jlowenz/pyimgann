@@ -6,7 +6,7 @@ from functools import partial
 import pathlib as pl
 import cPickle as pkl
 from skimage.io import imread
-from PyQt4.QtCore import pyqtSignal, QObject, QRect
+from PyQt4.QtCore import pyqtSignal, QObject, QRect, Qt
 from PyQt4.QtGui import QAction, QStandardItemModel, QStandardItem, QDialog, \
      QItemSelectionModel, QUndoCommand, QUndoStack, QFileDialog, QHeaderView
 
@@ -26,10 +26,10 @@ def to_model(items, model, formatter):
     for i in items:
         model.appendRow(formatter(i))
 
-def show_images(img_pair, ui):
+def show_images(img_pair, ctl):
     imga = imread(str(img_pair[0]))
     imgb = imread(str(img_pair[1]))
-    ui.dual_img.set_images((imga,imgb))
+    ctl.dual_img.set_images((imga,imgb))
 
 def corr_formatter(corr):
     left = QStandardItem("{0}".format(corr[0,:]))
@@ -54,84 +54,190 @@ def draw_keypoint(view, pt, color=(255,0,0,128), desc=""):
     ann = ui.Annotation(pts=[pt], color=color, desc=desc)
     ann.index = view.add_annotation(ann)
 
-def show_keypoints(apts, bpts, ui):
+def show_keypoints(apts, bpts, ctl):
     log.debug("show keypoints")
     for a in apts:
-        draw_keypoint(ui.dual_img, a)
+        draw_keypoint(ctl.dual_img, a)
     for b in bpts:
-        draw_keypoint(ui.dual_img, b + ui.dual_img.image_b_offset)
+        draw_keypoint(ctl.dual_img, b + ctl.dual_img.image_b_offset)
 
-def load_annotations(corrs, ui):
+def add_correspondence(proj, ctl, c):
+    model = ctl.corr_model
+    view = ctl.dual_img
+    ann = ui.Annotation(pts=[c[0],c[1]+view.image_b_offset],
+                        color=(255,0,0), desc="")
+    # list
+    item = corr_formatter(c)
+    model.appendRow(item)
+    # image
+    ann.index = view.add_annotation(ann)
+    ctl.correspondences[ann] = (c, item)
+
+    # manage model
+    idx, corrs = mdl.get_correspondences(proj)
+    corrs.add(c)
+    
+    return ann
+
+def remove_correspondence(proj, ctl, ann):
+    model = ctl.corr_model
+    view = ctl.dual_img    
+    c, listitem = ctl.correspondences[ann]
+    # list
+    mdlidx = model.indexFromItem(listitem[0])
+    model.removeRows(mdlidx.row(), 1)
+    # image
+    view.remove_annotation(ann.index)
+
+    # manage model
+    idx, corrs = mdl.get_correspondences(proj)
+    corrs.discard(c)
+
+    del ctl.correspondences[ann]
+
+def add_keypoint(proj, ctl, kp, which_img):
+    view = ctl.dual_img
+    ann = ui.Annotation(pts=[view.image_to_view(which_img,np.array(kp))], color=(255,0,0,128), desc="")
+    ann.index = view.add_annotation(ann)
+    ctl.keypoints[ann] = (which_img,kp)
+
+    # manage the model
+    akps, bkps = mdl.get_kps(proj)
+    if which_img == ui.DualImageView.IMAGE_A:
+        akps.add(kp)
+    else:
+        bkps.add(kp)
+
+    return ann
+
+def remove_keypoint(proj, ctl, ann):
+    view = ctl.dual_img
+    which, kp = ctl.keypoints[ann]
+    view.remove_annotation(ann.index)
+
+    # manage the model
+    akps, bkps = mdl.get_kps(proj)
+    if which_img == ui.DualImageView.IMAGE_A:
+        akps.discard(kp)
+    else:
+        bkps.discard(kp)
+
+    del ctl.keypoints[ann]
+
+def load_keypoints(proj, ctl, akps, bkps):
+    for a in akps:
+        add_keypoint(proj, ctl, a, ui.DualImageView.IMAGE_A)
+    for b in bkps:
+        add_keypoint(proj, ctl, b, ui.DualImageView.IMAGE_B)
+
+def load_annotations(proj, corrs, ctl):
     log.debug("load_annotations")
-    to_model(corrs, ui.corr_model, corr_formatter)
-    w = ui.corr_view.width()
-    ui.corr_view.horizontalHeader().setResizeMode(QHeaderView.Stretch)    
-    # cnt = ui.corr_view.horizontalHeader().count()
-    # for i in range(cnt):
-    #     ui.corr_view.setColumnWidth(i, w/2)
     for c in corrs:
-        draw_annotation(ui.dual_img, pts=c)
+        add_correspondence(proj, ctl, c)
+    ctl.corr_view.horizontalHeader().setResizeMode(QHeaderView.Stretch)
+    # view = ui.dual_img
+    # for c in corrs:
+    #     ann = ui.Annotation(view, pts=[c[0],c[1]+view.image_b_offset],
+    #                         color=(255,0,0), desc="")
+    #     annotations.append((c,ann))
 
-def load_frame(proj, ui, idx):
+    # to_model(corrs, ui.corr_model, corr_formatter)
+    # w = ui.corr_view.width()
+    # # cnt = ui.corr_view.horizontalHeader().count()
+    # # for i in range(cnt):
+    # #     ui.corr_view.setColumnWidth(i, w/2)
+    # for c in corrs:
+    #     draw_annotation(ui.dual_img, pts=c)
+
+def load_frame(proj, ctl, idx):
     tb.print_stack()
     log.debug("load frame {0}".format(idx))
-    ui.clear()
+    ctl.clear()
     # update the index    
     count = len(proj['pairs'])
     img_pair = proj['pairs'][idx]
     # load the image and keypoints
-    show_images(img_pair, ui)
+    show_images(img_pair, ctl)
     akps, bkps = mdl.get_kps(proj, idx)
-    show_keypoints(akps, bkps, ui)
+    #show_keypoints(akps, bkps, ui)
+    load_keypoints(proj, ctl, akps, bkps)
     # update the pair correspondences
     _, corrs = mdl.get_correspondences(proj, idx)
-    load_annotations(corrs, ui)
-    ui.status_field.setText("Loaded frame {0}".format(idx))
+    load_annotations(proj, corrs, ctl)
+    ctl.status_field.setText("Loaded frame {0}".format(idx))
 
-def load_project(proj, ui):
-    ui.clear(clear_pairs=True)
-    ui.status_field.setText("Loading project: " + proj['name'])
+def load_project(proj, ctl):
+    ctl.clear(clear_pairs=True)
+    ctl.status_field.setText("Loading project: " + proj['name'])
     # load the list data
-    to_model(proj['pairs'], ui.pair_model, partial(img_pair_formatter, proj))
+    to_model(proj['pairs'], ctl.pair_model, partial(img_pair_formatter, proj))
     # to_model(proj['correspondences'], ui.corr_model)
     # load the current image pair
     pair_index = proj.get('index',0)
     proj['index'] = pair_index
     #load_frame(proj, ui, pair_index)
-    ui.select_pair(pair_index)
-    ui.status_field.setText("{0} project ready".format(proj['name']))
-
+    ctl.select_pair(pair_index)
+    ctl.status_field.setText("{0} project ready".format(proj['name']))
 
 class AddCorrespondenceCmd(QUndoCommand):
-    def __init__(self, proj, view, pta, ptb, desc="", color=""):
+    def __init__(self, proj, ctl, pta, ptb, desc="", color=""):
         super(AddCorrespondenceCmd,self).__init__()
         self.proj = proj
-        self.view = view
-        self.pts = np.array([pta,ptb])
+        self.ctl = ctl
+        self.pts = mdl.Correspondence(pta,ptb)
         self.desc = desc
         self.color = color
         self.setText("add correspondence")
         
     def redo(self):
         log.debug("Add correspondence")
-        pair_index, corr_set = mdl.get_correspondences(self.proj)
-        akps, bkps = mdl.get_kps(self.proj, pair_index)
-        self.corr_index = len(corr_set)
-        corr_set.append(self.pts)
-        akps.add(tuple(self.pts[0]))
-        bkps.add(tuple(self.pts[1]))
-        self.ann = ui.Annotation(pts=np.array([self.pts[0],
-                                          self.pts[1] + self.view.image_b_offset]))
-        self.ann.index = self.view.add_annotation(self.ann)
+        self.ann = add_correspondence(self.proj, self.ctl, self.pts)
+        self.akpt = add_keypoint(self.proj, self.ctl, tuple(self.pts[0]), ui.DualImageView.IMAGE_A)
+        self.bkpt = add_keypoint(self.proj, self.ctl, tuple(self.pts[1]), ui.DualImageView.IMAGE_B)
+        self.ann.akpt = self.akpt
+        self.ann.bkpt = self.bkpt
+        #pair_index, corr_set = mdl.get_correspondences(self.proj)
+        #akps, bkps = mdl.get_kps(self.proj, pair_index)
+        #self.corr_index = len(corr_set)
+        #corr_set.append(self.pts)
+        #akps.add(tuple(self.pts[0]))
+        #bkps.add(tuple(self.pts[1]))
+        #self.ann = ui.Annotation(pts=np.array([self.pts[0],
+        #                                  self.pts[1] + self.view.image_b_offset]))
+        #self.ann.index = self.view.add_annotation(self.ann)
         
     def undo(self):
-        pair_index, corr_set = mdl.get_correspondences(self.proj)
-        akps, bkps = mdl.get_kps(self.proj, pair_index)
-        apt,bpt = corr_set[self.corr_index]
-        del corr_set[self.corr_index]
-        akps.discard(tuple(apt))
-        bkps.discard(tuple(bpt))
-        self.view.remove_annotation(self.ann.index)
+        log.debug("Undo/delete correspondence")
+        remove_correspondence(self.proj, self.ctl, self.ann)
+        remove_keypoint(self.proj, self.ctl, self.akpt)
+        remove_keypoint(self.proj, self.ctl, self.bkpt)
+        # pair_index, corr_set = mdl.get_correspondences(self.proj)
+        # akps, bkps = mdl.get_kps(self.proj, pair_index)
+        # apt,bpt = corr_set[self.corr_index]
+        # del corr_set[self.corr_index]
+        # akps.discard(tuple(apt))
+        # bkps.discard(tuple(bpt))
+        # self.view.remove_annotation(self.ann.index)
+
+class DeleteCorrespondenceCmd(QUndoCommand):
+    def __init__(self, proj, ctl, ann):
+        super(DeleteCorrespondenceCmd,self).__init__()
+        self.proj = proj
+        self.ctl = ctl
+        self.ann = ann
+        self.pts = self.ann.pts_
+        
+    def redo(self):
+        log.debug("Delete correspondence")
+        remove_correspondence(self.proj, self.ctl, self.ann)
+        remove_keypoint(self.proj, self.ctl, self.ann.akpt)
+        remove_keypoint(self.proj, self.ctl, self.ann.bkpt)
+
+    def undo(self):
+        log.debug("Undo/add correspondence")
+        self.ann = add_correspondence(self.proj, self.ctl, self.pts)
+        self.ann.akpt = add_keypoint(self.proj, self.ctl, tuple(pts[0]), ui.DualImageView.IMAGE_A)
+        self.ann.bkpt = add_keypoint(self.proj, self.ctl, tuple(pts[1]), ui.DualImageView.IMAGE_B)
 
 class CorrespondenceController(AnnotationController):
     project_changed = pyqtSignal()
@@ -216,10 +322,13 @@ class CorrespondenceController(AnnotationController):
         self.pair_view.selectionModel().selectionChanged.connect(self.pair_selected)
         self.dual_img.annotation_selected.connect(self.annotation_selected)
         self.dual_img.no_selection.connect(self.clear_selection)
+        self.dual_img.key_event.connect(self.on_key)
 
         self.a_point = None
         self.b_point = None
         self.selection = None
+        self.keypoints = {}
+        self.correspondences = {}
 
         self.undo_stack = QUndoStack()
 
@@ -247,7 +356,7 @@ class CorrespondenceController(AnnotationController):
         return self.check_save(checked)
 
     def add_correspondence(self):
-        self.undo_stack.push(AddCorrespondenceCmd(self.current_project, self.dual_img,
+        self.undo_stack.push(AddCorrespondenceCmd(self.current_project, self,
                                                   self.a_point, self.b_point))
         return True
 
@@ -285,6 +394,26 @@ class CorrespondenceController(AnnotationController):
         mdl_idx = self.pair_model.index(idx,0)
         #self.pair_view.setSelection(QRect(0,idx,1,1),QItemSelectionModel.Select)
         self.pair_view.setCurrentIndex(mdl_idx)
+
+    def cancel(self):
+        self.clear_selection()
+        self.a_point = None
+        self.b_point = None
+        self.to_clean_project()        
+
+    def delete(self, ann):
+        if ann.is_line:
+            self.undo_stack.push(DeleteCorrespondenceCmd(self.current_project, self, ann))
+
+    def on_key(self, key):
+        if key == Qt.Key_Escape:
+            self.cancel()
+        elif key == Qt.Key_Delete:
+            if self.selection:
+                ann = self.selection[1]
+                # remove annotation view
+                self.delete(ann)
+                
 
     def on_next_pair(self):
         log.debug("next image pair")

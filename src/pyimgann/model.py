@@ -38,6 +38,27 @@ class ImageAnnotationModel(object):
     def load(self, filename):
         log.info("load() is not implemented")
 
+class Correspondence(object):
+    def __init__(self, a, b):
+        self.pts_ = np.array([a,b])
+    
+    def __len__(self):
+        return len(self.pts_)
+
+    def __getitem__(self, i):
+        return self.pts_[i]
+
+    def __setitem__(self, i, v):
+        self.pts_[i] = v
+        return v
+
+    def __hash__(self):
+        return tuple([tuple(self.pts_[0]),
+                     tuple(self.pts_[1])]).__hash__()
+    
+    def __eq__(self, o):
+        return np.all(self.pts_ == o.pts_)
+
 def gen_pairs(images, skip, offset=0):
     pairs = []
     count = len(images)
@@ -65,10 +86,10 @@ def new_correspondence_project(name, image_path, skip, pat="*.png"):
             'kps': defaultdict(set),
             'pairs': pairs,
             'skip': skip,
-            'correspondences': defaultdict(list),
+            'correspondences': defaultdict(set),
             'pat': pat}
 
-def get_kps(proj, index):
+def get_kps(proj, index=None):
     pair_index = index or proj.get('index',0)
     img_pair = proj['pairs'][pair_index]
     return proj['kps'][img_pair[0]], proj['kps'][img_pair[1]]

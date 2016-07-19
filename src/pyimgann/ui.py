@@ -37,10 +37,17 @@ class Annotation(QObject):
         super(Annotation,self).__init__()
         self.desc_ = desc
         self.color_ = color
-        self.pts_ = pts
+        self.pts_ = np.array(pts)
         self.radius_ = 4
         self.index = -1
         self.item_ = None
+
+    def __hash__(self):
+        return tuple(map(tuple, self.pts_)).__hash__()
+
+    def __eq__(self, o):
+        #log.debug("__eq__: {0} {1}".format(self.pts_,o.pts_))
+        return (self.pts_ == o.pts_).all()
 
     def select(self):
         self.color_ = Annotation.SELECTED_COLOR
@@ -117,9 +124,13 @@ class DualImageView(QGraphicsView):
     annotations_changed = pyqtSignal()
     annotation_selected = pyqtSignal(int)
     no_selection = pyqtSignal()
-    
+
+    # click/point signals
     image_a_click = pyqtSignal(int,int)
     image_b_click = pyqtSignal(int,int)    
+
+    # keyboard
+    key_event = pyqtSignal(int)
 
     def __init__(self, main_win):
         super(QGraphicsView,self).__init__(main_win)
@@ -177,7 +188,12 @@ class DualImageView(QGraphicsView):
 
     def point_to_image(self, which, p):
         if which == DualImageView.IMAGE_B:
-            return p - self.offset_
+            return p - self.image_b_offset
+        return p
+
+    def image_to_view(self, which, p):
+        if which == DualImageView.IMAGE_B:
+            return p + self.image_b_offset
         return p
 
     def on_images_changed(self):
@@ -201,7 +217,7 @@ class DualImageView(QGraphicsView):
         self.repaint()
         
     def on_annotations_changed(self):
-        log.debug("on_annotations_changed")
+        #log.debug("on_annotations_changed")
         # self.scene_.removeItem(self.ann_group_)
         # self.ann_group_ = QGraphicsItemGroup()
         # self.ann_group_.setHandlesChildEvents(False)
@@ -305,6 +321,12 @@ class DualImageView(QGraphicsView):
             self.image_b_click.emit(pt[0],pt[1] - self.dim_)
 
     # handle the keyboard events here!
+    def keyPressEvent(self, ev):
+        pass
+
+    def keyReleaseEvent(self, ev):
+        k = ev.key()
+        self.key_event.emit(k)
 
 class QFileField(QWidget):
     # itemSelected is emitted when a valid file/dir is chosen
